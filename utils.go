@@ -3,6 +3,8 @@ package raft
 import (
 	"time"
 	"math/rand"
+	"encoding/base64"
+	crand "crypto/rand"
 )
 
 func randTime(min, max int64) <-chan time.Time {
@@ -19,4 +21,25 @@ func min(x,y int) int {
 		return x
 	}
 	return y
+}
+
+var randomString func(n int) string
+func init() {
+	randomString = __randomString()
+}
+
+func __randomString() func(n int)string {
+	d := make(map[string]struct{})
+	v := struct{}{}
+	return func(n int) string {
+		for {
+			b := make([]byte, 2*n)
+			crand.Read(b)
+			s := base64.URLEncoding.EncodeToString(b)[:n]
+			if _, ok := d[s]; !ok {
+				d[s] = v
+				return s
+			}
+		}
+	}
 }

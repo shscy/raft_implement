@@ -1,5 +1,8 @@
 package raft
 
+import "context"
+import "fmt"
+
 // rpc module
 //
 
@@ -96,10 +99,13 @@ func (rf *Raft) RequestAppendEntry(args *requestAppendEntries)(responseAppendEnt
 
 // RequestVoteResponse vote request
 func(rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, bool) {
+
 	res := responseVoteArgs{}
 	if args.Term < rf.currentTerm {
 		res.Term = rf.currentTerm
+		fmt.Println("1111111111")
 		res.VoteGranted = false
+
 		return res, false
 	} else if args.Term > rf.currentTerm { // update term
 		rf.updateCurrentTerm(args.Term)
@@ -109,8 +115,11 @@ func(rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, boo
 		// has voted other,
 		res.Term = rf.currentTerm
 		res.VoteGranted = false
+		fmt.Println("vote erro1", rf.votedFor, args.CandicateId, rf.me, rf.currentTerm)
 		return res, false
 	}
+
+
 	rf.log.mutex.Lock()
 	lastLogIndex, lastLogTerm:= rf.log.lastInfo()
 	rf.log.mutex.Unlock()
@@ -120,39 +129,53 @@ func(rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, boo
 		res.VoteGranted = true
 		// update votedFor pointer
 		rf.voteCandicate(args.CandicateId)
+		fmt.Println("successs")
 		return res, true
 	}
+	fmt.Println("vote error 2 ------------------")
 	return res, false
 }
 
 
 func (rf *Raft) updateCurrentTerm(curTerm int) {
+	//rf.mutex.Lock()
 	rf.currentTerm = curTerm
+	//rf.mutex.Unlock()
 }
 
 func (rf *Raft) voteCandicate(candicateId int) {
 	rf.votedFor = candicateId
 }
 
-// RpcEntry which is the entry of all rpc requests
+// deliver which is the entry of all rpc requests
 // all request go into buffered blockEventQ channel
 // and start a goroutine to wait for response
-func (rf *Raft) RpcEntry(m *message) {
+func (rf *Raft) deliver(m *message ) {
+	// m := &message{args:args, reply:reply, err:make(chan error)}
 
 	// while server state changed, stop response
-	go func (){
-		select {
-		case err :=  <- m.err:
-			m.Response(err)
-		case <- rf.exitFlag:
-			return
-		}
-
-	}()
-
 	select {
 	case <-rf.exitFlag:
 		return
 	case rf.blockEventQ <- m: // should block
+		//fmt.Println("get in ", m.args, rf.me)
+	}
+}
+
+
+// sendVoteRequest send a vote request
+func (rf *Raft) sendVoteRequest(ctx context.Context, server int, args requestVoteArgs, reply *responseVoteArgs) (bool){
+	//fmt.Println("errrrrrr: ", server)
+	ok := rf.peers[server].Call(ctx, "Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) RequestVote(args requestVoteArgs, reply *responseVoteArgs) {
+	message := &message{args:args, reply:reply, err:make(chan error)}
+	rf.deliver(message)
+	select {
+		case <-message.err:
+			case <-rf.exitFlag:
+				return
 	}
 }
