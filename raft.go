@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"labrpc"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -108,6 +107,8 @@ func (rf *Raft) FollowerLoop() {
 				//event.reply = rp
 				rpPtr := event.reply.(*responseVoteArgs)
 				*rpPtr = rp
+			case requestAppendEntries:
+				// todo handle append Entries
 			default:
 				err = errors.New("follower receve unsupport message")
 			}
@@ -117,17 +118,8 @@ func (rf *Raft) FollowerLoop() {
 				timeoutChan = randTime(int64(500), int64(800))
 			}
 		case <-timeoutChan:
-			//fmt.Println("time out ----->>>>>>>>")
-			// become to candicate
-			if rf.me == 2 {
-				//time.Sleep(time.Duration(10000) * time.Millisecond)
-				//rf.updateState(CandicateState)
-				//ft.Println("become candicate", rf.me)
-				rf.updateState(CandicateState)
-			} else {
-
-			}
-
+			rf.updateState(CandicateState)
+			return
 		}
 	}
 }
@@ -140,21 +132,19 @@ func (rf *Raft) voteSelf() {
 
 func (rf *Raft) CandicateLoop() {
 	var (
-		ctx    context.Context
+		ctx context.Context
 		//cancel func()
 	)
 	timeChan := randTime(int64(500), int64(800))
 	voteFor := true
-	// lock the update Term
-	var lock sync.Mutex
-	var lockNum sync.Mutex
 	// count the vote self num
 	var number int32 = 0
-
+	resp := make(chan *responseVoteArgs, 100)
 	//var wait sync.WaitGroup
 	//wait.Add(2)
 	for rf.state == CandicateState {
 		if voteFor {
+			resp = make(chan *responseVoteArgs, 100)
 			number = 0
 			voteFor = false
 			//fmt.Println("start to vote leader", rf.peers)
@@ -170,7 +160,7 @@ func (rf *Raft) CandicateLoop() {
 				if index == rf.me {
 					continue
 				}
-				go func(peer labrpc.ClientEnd, in int ) {
+				go func(peer labrpc.ClientEnd, in int) {
 
 					rf.log.mutex.Lock()
 					lastIndex, lastTerm := rf.log.lastInfo()
@@ -182,90 +172,63 @@ func (rf *Raft) CandicateLoop() {
 						LastLogIndex: lastIndex,
 					}
 					replay := &responseVoteArgs{}
-					_ = rf.sendVoteRequest(ctx, in, args, replay)
-					//fmt.Printf("%d send vote rquest %d ret : %v\n", rf.me, index, ret,)
-					fmt.Println("\nterm ",  rf.me, rf.currentTerm,  in, *replay)
+					if !rf.sendVoteRequest(ctx, in, args, replay){
+						// rpc false, return directly
+						return
+					}
 
-					// response  handler
+					//fmt.Printf("%d send vote rquest %d ret : %v\n", rf.me, index, ret,)
+					fmt.Println("\nterm ", rf.me, rf.currentTerm, in, *replay)
+
 					select {
 					case <-ctx.Done():
 						return
 					default:
 					}
-					// todo  should use respChan := make(chan *response, bufferLength)
-					// to handle the response pipeline to avoid using lock and lockNum
-					// variables.
-
-					// update self currentTerm
-					lock.Lock()
-					if replay.Term > rf.currentTerm {
-						//return
-						rf.updateCurrentTerm(replay.Term)
-						rf.updateState(FollowerState)
-						rf.votedFor = -1
-						//fmt.Println("*******************************")
-					}
-
-					lock.Unlock()
-
-					lockNum.Lock()
-					if replay.VoteGranted {
-						atomic.AddInt32(&number, int32(1))
-						fmt.Println("numebr: ", number)
-					}
-					lockNum.Unlock()
-
+					resp <- replay
 
 				}(*peer, index)
 			}
 		}
-		// todo first I do not want to use lock, assume number get the old value,
-		// select condition may block always, if add `default` case for select
-		// it will solve the above problem, but select may just case default and -<timeChan
-		// Whether it will bring Performance impact.
-		// to make programer more beautifual, I decide to use default rather than lock
-		lockNum.Lock()
-		fmt.Println("num", number)
 		if number >= int32(rf.QuorumSize()) {
 			rf.updateState(LeaderState)
-			lockNum.Unlock()
 			return
 		}
-		lockNum.Unlock()
 
 		select {
-		case <-timeChan:
-			//cancel()
-			//fmt.Println("cancel func *(****************", "sl;eep : ", rf.me)
-			voteFor = true
-			timeChan = randTime(int64(500), int64(800))
-			//time.Sleep(time.Duration(1000) * time.Millisecond)
-		default:
-		}
-		select {
-		default:
 		case <-rf.exitFlag:
 			return
-		case event := <-rf.blockEventQ:
-			//fmt.Println("888343535353636363636363636363636")
-			// just like followers, but never update timeChan
-			var (
-				err error = nil
-			)
+		case <-timeChan:
+			voteFor = true
+			timeChan = randTime(int64(500), int64(800))
+		case res := <-resp:
+			if res.Term > rf.currentTerm {
+				// rules for all servers
+				rf.updateCurrentTerm(res.Term)
+				// todo common => InitState(FollowerState)
+				rf.updateState(FollowerState)
+				rf.votedFor = -1
 
+				return
+			}
+			if res.VoteGranted {
+				number += 1
+			}
+		case event := <-rf.blockEventQ:
+			// just like followers, but never update timeChan
+			var err error = nil
 			switch args := event.args.(type) {
 			case requestVoteArgs:
 				//var rp responseVoteArgs
 				// candicate handle the vote args never success, because it vote it self
 				// and ignore the update field
 				rp, _ := rf.RequestVoteResponse(&args)
-				fmt.Println("response vote:****************** ", rf.me)
+				//fmt.Println("response vote:****************** ", rf.me)
 				rpPtr := event.reply.(*responseVoteArgs)
 				*rpPtr = rp
 			default:
 				err = errors.New("follower receve unsupport message")
 			}
-			// rpc select the err chan to judge whether response over
 			event.err <- err
 		}
 	}

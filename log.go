@@ -6,14 +6,13 @@ import (
 
 // raft log module
 
-
 // explain the significance of the existence of the index field
 // while we do not use snapshot, that is ok,
 // the value of the Index field of the structure EntryLog is coincides with the index of the log.entries
 
 type EntryLog struct {
-	Index int
-	Term int
+	Index   int
+	Term    int
 	command interface{}
 }
 
@@ -25,13 +24,13 @@ type EntryLog struct {
 type log struct {
 	mutex sync.Mutex // protect following fields
 
-	entries []EntryLog
-	length int
+	entries    []EntryLog
+	length     int
 	startIndex int
-	startTerm int
+	startTerm  int
 }
 
-func (l *log) lastInfo()(index int, term int) {
+func (l *log) lastInfo() (index int, term int) {
 	if l.length == 0 {
 		return l.startIndex, l.startTerm
 	}

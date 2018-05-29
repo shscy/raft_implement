@@ -7,8 +7,8 @@ import (
 
 	"fmt"
 	"os/signal"
-	"syscall"
 	"runtime"
+	"syscall"
 )
 
 type testConfig struct {
@@ -34,13 +34,13 @@ func make_config(n int) *testConfig {
 	}
 
 	//for name := range conf.endnames {
-		for j := 0; j < n; j++ {
-			names := conf.endnames[j]
-			for index, name := range names{
-				//for k := 0; k < n; k ++ {
-					fmt.Println("Name", name, index)
-					conf.net.Connect(name, index)
-				//}
+	for j := 0; j < n; j++ {
+		names := conf.endnames[j]
+		for index, name := range names {
+			//for k := 0; k < n; k ++ {
+			fmt.Println("Name", name, index)
+			conf.net.Connect(name, index)
+			//}
 		}
 	}
 	go func() {
@@ -48,7 +48,7 @@ func make_config(n int) *testConfig {
 		signal.Notify(c, syscall.SIGINT, syscall.SIGQUIT)
 		s := <-c
 		conf.exit <- struct{}{}
-		for i := 0; i < n; i ++ {
+		for i := 0; i < n; i++ {
 			close(conf.rafts[i].exitFlag)
 		}
 		fmt.Println("get signal ", s)

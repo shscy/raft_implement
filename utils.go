@@ -1,10 +1,10 @@
 package raft
 
 import (
-	"time"
-	"math/rand"
-	"encoding/base64"
 	crand "crypto/rand"
+	"encoding/base64"
+	"math/rand"
+	"time"
 )
 
 func randTime(min, max int64) <-chan time.Time {
@@ -16,7 +16,7 @@ func randTime(min, max int64) <-chan time.Time {
 	return time.After(time.Duration(d) * time.Millisecond)
 }
 
-func min(x,y int) int {
+func min(x, y int) int {
 	if x < y {
 		return x
 	}
@@ -24,11 +24,12 @@ func min(x,y int) int {
 }
 
 var randomString func(n int) string
+
 func init() {
 	randomString = __randomString()
 }
 
-func __randomString() func(n int)string {
+func __randomString() func(n int) string {
 	d := make(map[string]struct{})
 	v := struct{}{}
 	return func(n int) string {
