@@ -68,14 +68,72 @@ func (rf *Raft) Connect(in string, out *int) {
 }
 func (rf *Raft) updateState(state int) {
 	rf.state = state
+	if state == LeaderState {
+		rf.nextIndex = make([]int, len(rf.peers))
+		rf.matchIndex = make([]int, len(rf.peers))
+		for i := 0; i < len(rf.peers);i++{
+			rf.nextIndex[i] = rf.log.length
+			rf.matchIndex[i] = 0
+		}
+	} else if state == FollowerState {
+		rf.votedFor = -1
+	}
 }
 
 func (rf *Raft) QuorumSize() int {
 	return len(rf.peers)/2 + 1
 }
 
+const (
+	HeartSt  = int64(90)
+	HeartEnd = int64(100)
+)
+
 func (rf *Raft) LeaderLoop() {
 	// todo leader state loop
+	timeout := randTime(HeartSt, HeartEnd)
+	heartbeat := true
+	//var num = 0
+	appResp := make(chan appendResp)
+	logCommit := make(map[int]bool)
+
+	ctx, _ := context.WithCancel(context.Background())
+	for rf.state == LeaderState {
+		select {
+		case <-rf.exitFlag:
+			return
+		default:
+		}
+
+		if heartbeat {
+			heartbeat = false
+			for i := 0; i < len(rf.peers); i++ {
+				if i == rf.me {
+					continue
+				}
+				fmt.Printf("[raft:%d] sen append log to [raft:%d]\n", rf.me, i)
+				rf.makeAppendRequest(ctx, i, appResp)
+			}
+		}
+		select {
+		case reply := <-appResp:
+			if reply.resp.Term > rf.currentTerm {
+				rf.updateState(FollowerState)
+				rf.votedFor = -1
+				return
+			}
+			rf.handleAppendRequest(ctx, logCommit, reply, appResp)
+
+		//case <-rf.applyNotice:
+			// append request
+		//	timeout = randTime(HeartSt, HeartEnd)
+		case <-timeout:
+			heartbeat = true
+			timeout = randTime(HeartSt, HeartEnd)
+		case <-rf.blockEventQ:
+
+		}
+	}
 }
 
 func (rf *Raft) State() int {
@@ -109,6 +167,12 @@ func (rf *Raft) FollowerLoop() {
 				*rpPtr = rp
 			case requestAppendEntries:
 				// todo handle append Entries
+				//fmt.Printf("reecevet [raft:%d] rececv append log  form [raft: %d]\n",rf.me,args.LeaderId)
+				var resp responseAppendEntries
+				resp, update = rf.RequestAppendEntry(&args)
+				rpPtr := event.reply.(*responseAppendEntries)
+				fmt.Printf("[raft:%d] resposne append log :%v \t args : %v\n", rf.me, resp, args)
+				*rpPtr = resp
 			default:
 				err = errors.New("follower receve unsupport message")
 			}
@@ -172,7 +236,7 @@ func (rf *Raft) CandicateLoop() {
 						LastLogIndex: lastIndex,
 					}
 					replay := &responseVoteArgs{}
-					if !rf.sendVoteRequest(ctx, in, args, replay){
+					if !rf.sendVoteRequest(ctx, in, args, replay) {
 						// rpc false, return directly
 						return
 					}
@@ -208,7 +272,6 @@ func (rf *Raft) CandicateLoop() {
 				// todo common => InitState(FollowerState)
 				rf.updateState(FollowerState)
 				rf.votedFor = -1
-
 				return
 			}
 			if res.VoteGranted {
@@ -226,6 +289,16 @@ func (rf *Raft) CandicateLoop() {
 				//fmt.Println("response vote:****************** ", rf.me)
 				rpPtr := event.reply.(*responseVoteArgs)
 				*rpPtr = rp
+			case requestAppendEntries:
+				// todo handle append Entries
+				// receive the append log request, candicate => follower
+				// whill leader break down, costs less time to vote a leader
+				//fmt.Printf("[raft:%d] get the append log from [raft:%d]", rf.me, args.LeaderId)
+				resp, _ := rf.RequestAppendEntry(&args)
+				rpPtr := event.reply.(*responseAppendEntries)
+				*rpPtr = resp
+				rf.updateState(FollowerState)
+				return
 			default:
 				err = errors.New("follower receve unsupport message")
 			}

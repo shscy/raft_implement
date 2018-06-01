@@ -2,6 +2,7 @@ package raft
 
 import (
 	"sync"
+	"fmt"
 )
 
 // raft log module
@@ -37,4 +38,15 @@ func (l *log) lastInfo() (index int, term int) {
 	entry := l.entries[l.length-1]
 	index, term = entry.Index, entry.Term
 	return
+}
+
+func (l *log) logIndex(curLogIndex, delay int) int{
+	for i, v := range l.entries {
+		if v.Index == curLogIndex {
+			return i+delay
+		}
+	}
+	fmt.Println("[Raft:Error] logindex 0")
+	return 0
+
 }
