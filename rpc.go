@@ -1,9 +1,11 @@
 package raft
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // rpc module
-//
 
 // requestVoteArgs for vote with rpc
 type requestVoteArgs struct {
@@ -35,7 +37,10 @@ func (rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, bo
 
 		return res, false
 	} else if args.Term > rf.currentTerm { // update term
+		rf.updateState(FollowerState)
 		rf.updateCurrentTerm(args.Term)
+		// new term ,votedfor has expired
+		rf.votedFor = votedInitValue
 	}
 
 	if rf.votedFor != votedInitValue && rf.votedFor != args.CandicateId {
@@ -46,14 +51,15 @@ func (rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, bo
 		return res, false
 	}
 
-	rf.log.mutex.Lock()
 	lastLogIndex, lastLogTerm := rf.log.lastInfo()
-	rf.log.mutex.Unlock()
 
-	if args.LastLogoTerm > lastLogTerm || (args.LastLogIndex >= lastLogIndex) {
+	if args.LastLogoTerm > lastLogTerm || (args.LastLogIndex >= lastLogIndex && args.LastLogoTerm == lastLogTerm) {
 		res.Term = rf.currentTerm
 		res.VoteGranted = true
 		// update votedFor pointer
+		if (args.CandicateId == 3 || args.CandicateId == 5 || args.CandicateId == 2) && (rf.me == 0 || rf.me == 1 || rf.me == 4 || rf.me == 6){
+			fmt.Println("hahahahahahahahahahahahahahaha")
+		}
 		rf.voteCandicate(args.CandicateId)
 		return res, true
 	}
@@ -80,6 +86,7 @@ func (rf *Raft) deliver(m *message) {
 	case <-rf.exitFlag:
 		return
 	case rf.blockEventQ <- m: // should block
+		//fmt.Printf("raft[%d] receve requets\n", rf.me)
 	}
 }
 

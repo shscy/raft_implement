@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"math/rand"
 	"time"
+	"sync"
 )
 
 func randTime(min, max int64) <-chan time.Time {
@@ -29,6 +30,7 @@ func init() {
 	randomString = __randomString()
 }
 
+var lock sync.Mutex
 func __randomString() func(n int) string {
 	d := make(map[string]struct{})
 	v := struct{}{}
@@ -37,6 +39,8 @@ func __randomString() func(n int) string {
 			b := make([]byte, 2*n)
 			crand.Read(b)
 			s := base64.URLEncoding.EncodeToString(b)[:n]
+			lock.Lock()
+			defer lock.Unlock()
 			if _, ok := d[s]; !ok {
 				d[s] = v
 				return s

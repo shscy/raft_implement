@@ -55,28 +55,45 @@ type Raft struct {
 	state           int // state of the
 	applyNotice     chan struct{}
 	exitFlag        chan struct{} // stop signal channel, while stop, close(exitFlag)
+
+	updateStateFunc []func()
 }
 
 func init() {
 
 }
 
-func (rf *Raft) Connect(in string, out *int) {
-	fmt.Println("in ", in)
-	*out = 888
-
-}
 func (rf *Raft) updateState(state int) {
+	oldState := rf.state
+	if state == rf.state {
+		return
+	}
 	rf.state = state
 	if state == LeaderState {
 		rf.nextIndex = make([]int, len(rf.peers))
 		rf.matchIndex = make([]int, len(rf.peers))
-		for i := 0; i < len(rf.peers);i++{
+		for i := 0; i < len(rf.peers); i++ {
 			rf.nextIndex[i] = rf.log.length
 			rf.matchIndex[i] = 0
 		}
 	} else if state == FollowerState {
 		rf.votedFor = -1
+	} else if state == CandicateState{
+		rf.votedFor = -1
+	}
+	if rf.state != LeaderState {
+		return
+	}
+	// todo 仅仅作为调试
+
+	// update state hook functions for debug
+	for _,f := range rf.updateStateFunc{
+		if oldState == LeaderState {
+			fmt.Println("old state", oldState)
+		}
+		//fmt.Println("leader has vote ***************************************", rf.state, rf.me)
+		f()
+		//fmt.Println("leader has vote ****************************endendendenden", rf.state, rf.me)
 	}
 }
 
@@ -98,6 +115,30 @@ func (rf *Raft) LeaderLoop() {
 	logCommit := make(map[int]bool)
 
 	ctx, _ := context.WithCancel(context.Background())
+
+	logMockChan := make(chan struct{})
+	//go func() {
+	//	// this goroutine mock the client sned log
+	//	t := randTime(int64(700), int64(1500))
+	//	for {
+	//		select {
+	//		case <-rf.exitFlag:
+	//			return
+	//		// operate log
+	//		case <-t:
+	//			index, _ := rf.log.lastInfo()
+	//			rf.log.addEntry(EntryLog{
+	//				Index: index + 1,
+	//				Term: rf.currentTerm,
+	//			})
+	//
+	//			logMockChan <- struct{}{}
+	//			return
+	//			//t = randTime(int64(700), int64(1500))
+	//		}
+	//	}
+	//}()
+	fmt.Printf("\n\n\n\n---------------------------------------")
 	for rf.state == LeaderState {
 		select {
 		case <-rf.exitFlag:
@@ -111,12 +152,13 @@ func (rf *Raft) LeaderLoop() {
 				if i == rf.me {
 					continue
 				}
-				fmt.Printf("[raft:%d] sen append log to [raft:%d]\n", rf.me, i)
+				//fmt.Printf("[raft:%d] send append log to [raft:%d] %v\n", rf.me, i, rf.log.length)
 				rf.makeAppendRequest(ctx, i, appResp)
 			}
 		}
 		select {
 		case reply := <-appResp:
+			//fmt.Println("\n\nleader handler --------------------------")
 			if reply.resp.Term > rf.currentTerm {
 				rf.updateState(FollowerState)
 				rf.votedFor = -1
@@ -125,13 +167,19 @@ func (rf *Raft) LeaderLoop() {
 			rf.handleAppendRequest(ctx, logCommit, reply, appResp)
 
 		//case <-rf.applyNotice:
-			// append request
+		// append request
 		//	timeout = randTime(HeartSt, HeartEnd)
 		case <-timeout:
 			heartbeat = true
 			timeout = randTime(HeartSt, HeartEnd)
-		case <-rf.blockEventQ:
-
+		//case <-rf.blockEventQ:
+			// no network delay or any Network partition, leader will not receive
+			// vote and append log info
+		case <-logMockChan:
+			// todo just for test
+			// receive a client log
+			//heartbeat = true
+			//timeout = randTime(HeartSt, HeartEnd)
 		}
 	}
 }
@@ -140,9 +188,15 @@ func (rf *Raft) State() int {
 	return rf.state
 }
 
+
 func (rf *Raft) FollowerLoop() {
 	// todo
-	timeoutChan := randTime(int64(500), int64(800))
+	var timeoutChan <-chan time.Time
+	if rf.me == 5 {
+		timeoutChan = randTime(int64(300), int64(500))
+	}else{
+		timeoutChan = randTime(int64(500), int64(800))
+	}
 
 	for rf.state == FollowerState {
 		//fmt.Println("follower loop: ", rf.me)
@@ -157,13 +211,15 @@ func (rf *Raft) FollowerLoop() {
 				err    error
 				update bool
 			)
-
+			//fmt.Println("rececv emssage mesage message message, ", rf.me, event.args)
 			switch args := event.args.(type) {
 			case requestVoteArgs:
+				//fmt.Println("recevt vote args", rf.me)
 				var rp responseVoteArgs
 				rp, update = rf.RequestVoteResponse(&args)
 				//event.reply = rp
 				rpPtr := event.reply.(*responseVoteArgs)
+				//fmt.Printf("raft[%d] handle vote req %v", rf.me, rp.VoteGranted)
 				*rpPtr = rp
 			case requestAppendEntries:
 				// todo handle append Entries
@@ -171,7 +227,6 @@ func (rf *Raft) FollowerLoop() {
 				var resp responseAppendEntries
 				resp, update = rf.RequestAppendEntry(&args)
 				rpPtr := event.reply.(*responseAppendEntries)
-				fmt.Printf("[raft:%d] resposne append log :%v \t args : %v\n", rf.me, resp, args)
 				*rpPtr = resp
 			default:
 				err = errors.New("follower receve unsupport message")
@@ -179,10 +234,12 @@ func (rf *Raft) FollowerLoop() {
 			// rpc select the err chan to judge whether response over
 			event.err <- err
 			if update {
+				//fmt.Printf("\nraft[%d] start a vote\n", rf.me)
 				timeoutChan = randTime(int64(500), int64(800))
 			}
 		case <-timeoutChan:
 			rf.updateState(CandicateState)
+			//fmt.Printf("\nraft[%d] follower => candicate\n", rf.me)
 			return
 		}
 	}
@@ -194,28 +251,68 @@ func (rf *Raft) voteSelf() {
 	rf.votedFor = rf.me
 }
 
+type debug struct {
+	me int
+	term int
+}
+func (rf *Raft) makeVote(ctx context.Context, in22 int, resp chan *responseVoteArgs, lock2 *sync.Mutex, voteMap *[]debug) {
+		lastIndex, lastTerm := rf.log.lastInfo()
+		args := requestVoteArgs{
+			Term:         rf.currentTerm,
+			CandicateId:  rf.me,
+			LastLogoTerm: lastTerm,
+			LastLogIndex: lastIndex,
+		}
+		//fmt.Println("send vote requets")
+		replay := &responseVoteArgs{}
+		if ok := rf.sendVoteRequest(ctx, in22, args, replay);!ok {
+			return
+		}
+
+
+		//fmt.Printf("%d send vote rquest %d ret : %v\n", rf.me, index, ret,)
+		//fmt.Println("\nterm ", rf.me, rf.currentTerm, in, *replay)
+
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		if replay.VoteGranted {
+			lock2.Lock()
+			*voteMap = append(*voteMap, debug{me:in22, term:replay.Term})
+			lock2.Unlock()
+		}
+		resp <- replay
+
+	}
+
 func (rf *Raft) CandicateLoop() {
 	var (
 		ctx context.Context
-		//cancel func()
 	)
 	timeChan := randTime(int64(500), int64(800))
 	voteFor := true
-	// count the vote self num
 	var number int32 = 0
 	resp := make(chan *responseVoteArgs, 100)
-	//var wait sync.WaitGroup
-	//wait.Add(2)
+	var voteMap  []debug
+	var lock2 sync.Mutex
+	count:= 0
+	cc := make([]int, 0)
+
 	for rf.state == CandicateState {
 		if voteFor {
+			//rf.blockEventQ = make(chan *message, 100)
+			voteMap = make([]debug,0)
 			resp = make(chan *responseVoteArgs, 100)
 			number = 0
+			count = 0
+			cc = make([]int, 0)
 			voteFor = false
-			//fmt.Println("start to vote leader", rf.peers)
 			rf.voteSelf()
 			ctx, _ = context.WithCancel(context.Background())
-			for index, peer := range rf.peers {
-				//fmt.Println("get in ")
+			for index := 0; index < len(rf.peers); index ++ {
+
 				select {
 				case <-rf.exitFlag:
 					return
@@ -224,38 +321,17 @@ func (rf *Raft) CandicateLoop() {
 				if index == rf.me {
 					continue
 				}
-				go func(peer labrpc.ClientEnd, in int) {
 
-					rf.log.mutex.Lock()
-					lastIndex, lastTerm := rf.log.lastInfo()
-					rf.log.mutex.Unlock()
-					args := requestVoteArgs{
-						Term:         rf.currentTerm,
-						CandicateId:  rf.me,
-						LastLogoTerm: lastTerm,
-						LastLogIndex: lastIndex,
-					}
-					replay := &responseVoteArgs{}
-					if !rf.sendVoteRequest(ctx, in, args, replay) {
-						// rpc false, return directly
-						return
-					}
-
-					//fmt.Printf("%d send vote rquest %d ret : %v\n", rf.me, index, ret,)
-					fmt.Println("\nterm ", rf.me, rf.currentTerm, in, *replay)
-
-					select {
-					case <-ctx.Done():
-						return
-					default:
-					}
-					resp <- replay
-
-				}(*peer, index)
+				go rf.makeVote(ctx, index, resp, &lock2, &voteMap)
 			}
 		}
 		if number >= int32(rf.QuorumSize()) {
+			if rf.me == 2 || rf.me == 3 || rf.me == 5 {
+				fmt.Printf("\nraft[%d] candicate => leder %v %d %d %s %d %v\n", rf.me, voteMap, number,rf.currentTerm," :: count", count, cc)
+			}
 			rf.updateState(LeaderState)
+			//cancel()
+			number = 0
 			return
 		}
 
@@ -274,7 +350,7 @@ func (rf *Raft) CandicateLoop() {
 				rf.votedFor = -1
 				return
 			}
-			if res.VoteGranted {
+			if res.VoteGranted && res.Term == rf.currentTerm{
 				number += 1
 			}
 		case event := <-rf.blockEventQ:
@@ -320,7 +396,7 @@ func (rf *Raft) StateLoop() {
 		// exit the server
 		select {
 		case <-rf.exitFlag:
-			fmt.Println("errr loop out", rf.me)
+			//fmt.Printf("raft[%d] catch exitFlag stop signal, shutdown\n", rf.me)
 			return
 		default:
 		}
@@ -335,3 +411,5 @@ func (rf *Raft) StateLoop() {
 		}
 	}
 }
+
+

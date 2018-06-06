@@ -14,7 +14,7 @@ import (
 type EntryLog struct {
 	Index   int
 	Term    int
-	command interface{}
+	//command interface{}
 }
 
 // log record the logs of the server
@@ -31,7 +31,16 @@ type log struct {
 	startTerm  int
 }
 
+func (l *log) addEntry(entry EntryLog){
+	l.mutex.Lock()
+	l.length += 1
+	l.entries = append(l.entries, entry)
+	l.mutex.Unlock()
+}
+
 func (l *log) lastInfo() (index int, term int) {
+	l.mutex.Lock()
+	defer l.mutex.Unlock()
 	if l.length == 0 {
 		return l.startIndex, l.startTerm
 	}

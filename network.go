@@ -7,27 +7,32 @@ import (
 
 	"fmt"
 	"os/signal"
-	"runtime"
 	"syscall"
 )
 
 type testConfig struct {
-	n        int
-	net      *labrpc.Network
-	rafts    []*Raft
-	endnames map[int][]string // client end <=> server
-	group    sync.WaitGroup
-	exit     chan struct{}
+	n         int
+	net       *labrpc.Network
+	rafts     []*Raft
+	endnames  map[int][]string // client end <=> server
+	group     sync.WaitGroup
+	exit      chan struct{}
+	startFunc []func()
+}
+
+func (t *testConfig) startWithGoroutine() {
+	for _, f := range t.startFunc {
+		go f()
+	}
 }
 
 func make_config(n int) *testConfig {
 	//fmt.Println("ranutmn :", )
-	runtime.GOMAXPROCS(runtime.NumCPU())
 	conf := &testConfig{n: n}
 	conf.endnames = make(map[int][]string)
 	conf.net = labrpc.MakeNetwork()
 	conf.rafts = make([]*Raft, n)
-	conf.exit = make(chan struct{})
+	conf.exit = make(chan struct{}, 1)
 
 	for i := 0; i < n; i++ {
 		conf.rafts[i] = conf.startServer(i)
@@ -38,7 +43,7 @@ func make_config(n int) *testConfig {
 		names := conf.endnames[j]
 		for index, name := range names {
 			//for k := 0; k < n; k ++ {
-			fmt.Println("Name", name, index)
+			//fmt.Println("Name", name, index)
 			conf.net.Connect(name, index)
 			//}
 		}
@@ -47,7 +52,8 @@ func make_config(n int) *testConfig {
 		c := make(chan os.Signal)
 		signal.Notify(c, syscall.SIGINT, syscall.SIGQUIT)
 		s := <-c
-		conf.exit <- struct{}{}
+		//conf.exit <- struct{}{}
+		close(conf.exit)
 		for i := 0; i < n; i++ {
 			close(conf.rafts[i].exitFlag)
 		}
@@ -84,12 +90,13 @@ func (c *testConfig) startServer(i int) *Raft {
 	server := labrpc.MakeServer()
 	server.AddService(labrpc.MakeService(raft))
 	c.net.AddServer(i, server)
-	go func() {
+
+	c.startFunc = append(c.startFunc, func() {
 		raft.StateLoop()
 		// loop exit
 		c.net.DeleteServer(i)
 		// wait exit flag chan
 		raft.Wait()
-	}()
+	})
 	return raft
 }
