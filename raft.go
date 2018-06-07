@@ -57,6 +57,10 @@ type Raft struct {
 	exitFlag        chan struct{} // stop signal channel, while stop, close(exitFlag)
 
 	updateStateFunc []func()
+
+
+	//debug
+	testIndex int
 }
 
 func init() {
@@ -104,6 +108,9 @@ func (rf *Raft) QuorumSize() int {
 const (
 	HeartSt  = int64(90)
 	HeartEnd = int64(100)
+
+	VoteSt = int64(200)
+	VoteEnd = int64(300)
 )
 
 func (rf *Raft) LeaderLoop() {
@@ -193,9 +200,9 @@ func (rf *Raft) FollowerLoop() {
 	// todo
 	var timeoutChan <-chan time.Time
 	if rf.me == 5 {
-		timeoutChan = randTime(int64(300), int64(500))
+		timeoutChan = randTime(VoteSt, VoteEnd)
 	}else{
-		timeoutChan = randTime(int64(500), int64(800))
+		timeoutChan = randTime(VoteSt, VoteEnd)
 	}
 
 	for rf.state == FollowerState {
@@ -235,7 +242,7 @@ func (rf *Raft) FollowerLoop() {
 			event.err <- err
 			if update {
 				//fmt.Printf("\nraft[%d] start a vote\n", rf.me)
-				timeoutChan = randTime(int64(500), int64(800))
+				timeoutChan = randTime(int64(200), int64(300))
 			}
 		case <-timeoutChan:
 			rf.updateState(CandicateState)
@@ -245,17 +252,9 @@ func (rf *Raft) FollowerLoop() {
 	}
 }
 
-// voteSelf start to
-func (rf *Raft) voteSelf() {
-	rf.updateCurrentTerm(rf.currentTerm + 1)
-	rf.votedFor = rf.me
-}
+func (rf *Raft) makeVote(ctx context.Context, in22 int, resp chan *responseVoteArgs, wait *sync.WaitGroup) {
+		//defer wait.Done()
 
-type debug struct {
-	me int
-	term int
-}
-func (rf *Raft) makeVote(ctx context.Context, in22 int, resp chan *responseVoteArgs, lock2 *sync.Mutex, voteMap *[]debug) {
 		lastIndex, lastTerm := rf.log.lastInfo()
 		args := requestVoteArgs{
 			Term:         rf.currentTerm,
@@ -264,8 +263,8 @@ func (rf *Raft) makeVote(ctx context.Context, in22 int, resp chan *responseVoteA
 			LastLogIndex: lastIndex,
 		}
 		//fmt.Println("send vote requets")
-		replay := &responseVoteArgs{}
-		if ok := rf.sendVoteRequest(ctx, in22, args, replay);!ok {
+		replay2 := &responseVoteArgs{}
+		if ok := rf.sendVoteRequest(ctx, in22, args, replay2);!ok {
 			return
 		}
 
@@ -278,70 +277,75 @@ func (rf *Raft) makeVote(ctx context.Context, in22 int, resp chan *responseVoteA
 			return
 		default:
 		}
-		if replay.VoteGranted {
-			lock2.Lock()
-			*voteMap = append(*voteMap, debug{me:in22, term:replay.Term})
-			lock2.Unlock()
-		}
-		resp <- replay
+		//if replay.VoteGranted {
+		//	lock2.Lock()
+		//	*voteMap = append(*voteMap, debug{me:in22, term:replay.Term})
+		//	lock2.Unlock()
+		//}
+		resp <- replay2
 
 	}
+
 
 func (rf *Raft) CandicateLoop() {
 	var (
 		ctx context.Context
 	)
-	timeChan := randTime(int64(500), int64(800))
+	timeChan := randTime(VoteSt, VoteEnd)
 	voteFor := true
 	var number int32 = 0
-	resp := make(chan *responseVoteArgs, 100)
-	var voteMap  []debug
-	var lock2 sync.Mutex
-	count:= 0
-	cc := make([]int, 0)
+	var resp2 chan *responseVoteArgs
 
+	flag := false
+	wait := new(sync.WaitGroup)
 	for rf.state == CandicateState {
+
 		if voteFor {
 			//rf.blockEventQ = make(chan *message, 100)
-			voteMap = make([]debug,0)
-			resp = make(chan *responseVoteArgs, 100)
-			number = 0
-			count = 0
-			cc = make([]int, 0)
+
+			resp2 = make(chan *responseVoteArgs, 100)
+			number = 1
+
 			voteFor = false
-			rf.voteSelf()
+			rf.currentTerm ++
+			rf.votedFor = rf.me
 			ctx, _ = context.WithCancel(context.Background())
+
+			//lastIndex, lastTerm := rf.log.lastInfo()
 			for index := 0; index < len(rf.peers); index ++ {
-
-				select {
-				case <-rf.exitFlag:
-					return
-				default:
+				if index != rf.me {
+					flag = true
+					//wait.Add(1)
+					go rf.makeVote(ctx, index, resp2, wait)
 				}
-				if index == rf.me {
-					continue
-				}
-
-				go rf.makeVote(ctx, index, resp, &lock2, &voteMap)
 			}
+
 		}
 		if number >= int32(rf.QuorumSize()) {
 			if rf.me == 2 || rf.me == 3 || rf.me == 5 {
-				fmt.Printf("\nraft[%d] candicate => leder %v %d %d %s %d %v\n", rf.me, voteMap, number,rf.currentTerm," :: count", count, cc)
+				fmt.Printf("\n [index: %d ] raft[%d] candicate => number %d [votemap] %v  [trerm: ]  %v %d\n", rf.testIndex, rf.me,  number,rf.currentTerm," :: count", len(rf.peers))
 			}
 			rf.updateState(LeaderState)
 			//cancel()
-			number = 0
 			return
 		}
 
 		select {
 		case <-rf.exitFlag:
 			return
+
 		case <-timeChan:
+			if flag {
+			//fmt.Println("wait before", rf.testIndex)
+				//wait.Wait()
+				wait = new(sync.WaitGroup)
+			//	fmt.Println("wait after", rf.testIndex)
+				flag = false
+			}
 			voteFor = true
-			timeChan = randTime(int64(500), int64(800))
-		case res := <-resp:
+			timeChan = randTime(VoteSt, VoteEnd)
+
+		case res := <-resp2:
 			if res.Term > rf.currentTerm {
 				// rules for all servers
 				rf.updateCurrentTerm(res.Term)
@@ -353,6 +357,7 @@ func (rf *Raft) CandicateLoop() {
 			if res.VoteGranted && res.Term == rf.currentTerm{
 				number += 1
 			}
+
 		case event := <-rf.blockEventQ:
 			// just like followers, but never update timeChan
 			var err error = nil
@@ -366,7 +371,6 @@ func (rf *Raft) CandicateLoop() {
 				rpPtr := event.reply.(*responseVoteArgs)
 				*rpPtr = rp
 			case requestAppendEntries:
-				// todo handle append Entries
 				// receive the append log request, candicate => follower
 				// whill leader break down, costs less time to vote a leader
 				//fmt.Printf("[raft:%d] get the append log from [raft:%d]", rf.me, args.LeaderId)
@@ -379,6 +383,7 @@ func (rf *Raft) CandicateLoop() {
 				err = errors.New("follower receve unsupport message")
 			}
 			event.err <- err
+
 		}
 	}
 

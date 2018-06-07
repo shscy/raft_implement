@@ -94,9 +94,9 @@ func (c *testConfig) startServer(i int) *Raft {
 	c.startFunc = append(c.startFunc, func() {
 		raft.StateLoop()
 		// loop exit
-		c.net.DeleteServer(i)
+		// 、、c.net.DeleteServer(i)
 		// wait exit flag chan
-		raft.Wait()
+		//raft.Wait()
 	})
 	return raft
 }

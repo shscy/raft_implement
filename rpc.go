@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"fmt"
 )
 
 // rpc module
@@ -58,7 +57,6 @@ func (rf *Raft) RequestVoteResponse(args *requestVoteArgs) (responseVoteArgs, bo
 		res.VoteGranted = true
 		// update votedFor pointer
 		if (args.CandicateId == 3 || args.CandicateId == 5 || args.CandicateId == 2) && (rf.me == 0 || rf.me == 1 || rf.me == 4 || rf.me == 6){
-			fmt.Println("hahahahahahahahahahahahahahaha")
 		}
 		rf.voteCandicate(args.CandicateId)
 		return res, true
