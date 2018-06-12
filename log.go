@@ -2,7 +2,7 @@ package raft
 
 import (
 	"sync"
-	"fmt"
+//	"fmt"
 )
 
 // raft log module
@@ -55,7 +55,14 @@ func (l *log) logIndex(curLogIndex, delay int) int{
 			return i+delay
 		}
 	}
-	fmt.Println("[Raft:Error] logindex 0")
+	//fmt.Println("[Raft:Error] logindex 0")
 	return 0
 
+}
+
+
+
+
+type LogClientMessage struct {
+	commandLog interface{}
 }

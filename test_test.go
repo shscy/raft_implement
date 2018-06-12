@@ -14,7 +14,7 @@ func TestVoteLeader(t *testing.T) {
 	runtime.GOMAXPROCS(runtime.NumCPU())
 	var wait sync.WaitGroup
 	var num int
-	for num = 0; num < 6000; num++ {
+	for num = 0; num < 100; num++ {
 		wait.Add(1)
 		var once sync.Once
 		k := num
@@ -104,6 +104,119 @@ func TestVoteLeader(t *testing.T) {
 	wait.Wait()
 
 }
+
+func TestLogAppend(t *testing.T) {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	var wait sync.WaitGroup
+	var num int
+	for num = 0; num < 100; num++ {
+		wait.Add(1)
+		k := num
+		go func() {
+			n := 7
+			// make_config default have
+			conf := make_config(n)
+
+			// before start server , patch the server state
+			conf.rafts[0].log.addEntry(EntryLog{Index: 1, Term: 1})
+			conf.rafts[0].currentTerm = 1
+
+			conf.rafts[1].log.addEntry(EntryLog{Index: 1, Term: 1})
+			conf.rafts[1].currentTerm = 1
+
+			conf.rafts[4].log.addEntry(EntryLog{Index: 1, Term: 1})
+			conf.rafts[4].currentTerm = 1
+
+			conf.rafts[6].log.addEntry(EntryLog{Index: 1, Term: 1})
+			conf.rafts[6].currentTerm = 1
+
+			for _, v := range conf.rafts {
+				v.testIndex = k
+			}
+			conf.startWithGoroutine()
+
+			time.Sleep(time.Duration(5) * time.Second)
+			leaderCount, followCount := 0, 0
+			for _, v := range conf.rafts {
+				if v.State() == LeaderState {
+					leaderCount++
+				} else if v.State() == FollowerState {
+					followCount++
+				}
+			}
+			if leaderCount != 1 && followCount != 6 {
+				t.Error("leader count and followerCount error", leaderCount, followCount)
+			}
+			wait.Done()
+		}()
+	}
+
+	wait.Wait()
+}
+
+// TestLogSync 从Leader同步日志到follower
+func TestLogSync(t *testing.T) {
+	runtime.GOMAXPROCS(runtime.NumCPU())
+	var wait sync.WaitGroup
+	var num int
+	for num = 0; num < 1; num++ {
+		wait.Add(1)
+		k := num
+		go func() {
+			n := 7
+			// make_config default have
+			conf := make_config(n)
+
+			// before start server , patch the server state
+			conf.rafts[0].log.addEntry(EntryLog{Index: 1, Term: 1})
+			//conf.rafts[0].log.addEntry(EntryLog{Index: 2, Term: 1})
+			//conf.rafts[0].log.addEntry(EntryLog{Index: 3, Term: 1})
+			//conf.rafts[0].log.addEntry(EntryLog{Index: 4, Term: 1})
+			//conf.rafts[0].currentTerm = 1
+			// raft[0] => leader default
+			conf.rafts[0].updateState(LeaderState)
+			conf.rafts[0].votedFor = 0
+
+			for _, v := range conf.rafts {
+				v.testIndex = k
+			}
+			conf.startWithGoroutine()
+			go func(index int) {
+				raft := conf.rafts[index]
+				for i := 0; i < 10; i++ {
+					raft.blockEventQ <- &message{
+						args: &LogClientMessage{},
+						err:  make(chan error),
+					}
+					time.Sleep(time.Duration(100) * time.Millisecond)
+				}
+			}(0)
+			time.Sleep(time.Duration(5) * time.Second)
+			for i, v := range conf.rafts {
+				if v.State() == LeaderState && i != 0 {
+					t.Error("leader should be 0, but it is ,LEADER ERROR", i)
+				}
+				if v.State() == LeaderState { // leader
+					if v.log.length != 11 {
+						t.Error("leader log length should be 11", v.log.length)
+					}
+				} else {
+					if v.State() != FollowerState {
+						t.Error("should be follower", i)
+					}
+					if v.log.length != 11 {
+						t.Errorf("follower[%d] log should be 11, not [%d] %v %d", i, v.log.length, v.log.entries, len(v.log.entries))
+					}
+				}
+			}
+
+			wait.Done()
+		}()
+	}
+
+	wait.Wait()
+}
+
 func Network() {
 	runtime.GOMAXPROCS(4)
 	n := 3

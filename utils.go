@@ -4,8 +4,8 @@ import (
 	crand "crypto/rand"
 	"encoding/base64"
 	"math/rand"
-	"time"
 	"sync"
+	"time"
 )
 
 func randTime(min, max int64) <-chan time.Time {
@@ -31,6 +31,7 @@ func init() {
 }
 
 var lock sync.Mutex
+
 func __randomString() func(n int) string {
 	d := make(map[string]struct{})
 	v := struct{}{}

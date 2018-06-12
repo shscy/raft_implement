@@ -3,7 +3,6 @@ package raft
 import (
 	"context"
 	"sort"
-
 )
 
 type requestAppendEntries struct {
@@ -39,10 +38,14 @@ func (rf *Raft) RequestAppendEntry(args *requestAppendEntries) (responseAppendEn
 	if logIndex < args.PrevLogIndex || (logIndex == args.PrevLogIndex && logTerm != args.PrevLogTerm) {
 		return responseAppendEntries{rf.currentTerm, false}, true
 	}
-	if len(rf.log.entries) == 0 {
+
+	if rf.log.length == 0 {
+		rf.log.mutex.Lock()
+		rf.log.entries = append(rf.log.entries, args.Entries...)
+		rf.log.length = len(rf.log.entries)
+		rf.log.mutex.Unlock()
 		return responseAppendEntries{rf.currentTerm, true}, true
 	}
-
 	// get the maxest match , and followers delete the logs after the matLogIndex
 	// and append the leader's logs
 	isMatch, matchIndex := false, 0
@@ -58,8 +61,14 @@ func (rf *Raft) RequestAppendEntry(args *requestAppendEntries) (responseAppendEn
 	if !isMatch {
 		return responseAppendEntries{rf.currentTerm, false}, true
 	}
+
+	if len(args.Entries) == 0 {
+		return responseAppendEntries{rf.currentTerm, true}, true
+	}
+	rf.log.mutex.Lock()
 	rf.log.entries = append(rf.log.entries[:matchIndex+1], args.Entries...)
 	rf.log.length = len(rf.log.entries)
+	rf.log.mutex.Unlock()
 
 	_, logIndex = rf.log.lastInfo()
 
@@ -100,21 +109,20 @@ func (rf *Raft) makeAppendRequestArgs(server int) *requestAppendEntries {
 	rf.mutex.Lock()
 	defer rf.mutex.Unlock()
 
-	if rf.nextIndex[server] - 1 > 0 {
-		args.PrevLogIndex = rf.log.entries[rf.nextIndex[server]-1].Index
+	index := rf.nextIndex[server] - 1
+	if index >= 0 {
+		args.PrevLogIndex = rf.log.entries[index].Index
+		args.PrevLogTerm = rf.log.entries[index].Term
+
+	}
+	if args.PrevLogIndex == 0 && args.PrevLogTerm == 0 {
+		args.Entries = rf.log.entries[0:]
 	} else {
-		args.PrevLogIndex = 0
+		args.Entries = rf.log.entries[index+1:]
 	}
+
 	args.LeaderCommit = rf.commitIndex
-	rf.log.mutex.Lock()
-	defer rf.log.mutex.Unlock() // protect the rf.log.length
-	if rf.nextIndex[server] < rf.log.length {
-		args.Entries = rf.log.entries[rf.nextIndex[server]:]
-		//fmt.Println("raft log info ", rf.me, rf.log.entries, len(rf.log.entries), rf.nextIndex[server]-1)
-		if rf.nextIndex[server] - 1 > 0 {
-			args.PrevLogTerm = rf.log.entries[rf.nextIndex[server]-1].Term
-		}
-	}
+
 	if len(args.Entries) > 0 {
 		//fmt.Printf("raft[%d] append logs args %d, %v, %d, %d", rf.me, args.LeaderCommit, args.Entries, args.PrevLogIndex, args.PrevLogTerm)
 	}
@@ -148,13 +156,20 @@ func (rf *Raft) updateNextAndMatch(resp appendResp) {
 	//fmt.Println("\n\nupdate next data", index, rf.me)
 }
 
+func (rf *Raft) updateNextByClientLog() {
+	rf.mutex.Lock()
+	for i, _ := range rf.peers {
+		rf.nextIndex[i] = rf.log.length
+	}
+	rf.mutex.Unlock()
+}
 func (rf *Raft) handleAppendRequest(ctx context.Context, commit map[int]bool, resp appendResp, respChan chan appendResp) {
 	if resp.resp.Success {
-		//fmt.Println("leader handle append log response success111")
 		commit[resp.index] = true
 		rf.mutex.Lock()
 		rf.updateNextAndMatch(resp)
 		rf.mutex.Unlock()
+
 		if len(commit) >= rf.QuorumSize() {
 			ret := []int{}
 			for k := range commit {
